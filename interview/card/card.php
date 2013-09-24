@@ -8,23 +8,12 @@
  */
 function getTenCards ($unsort_cards)
 {
-    $unique_cards = array();
-    
-    // 哈希去重
-    foreach ($unsort_cards as $card) {
-        if (isset($unique_cards[$card])) {
-            $unique_cards[$card] += 1;
-        } else {
-            $unique_cards[$card] = 1;
-        }
-    }
-    
     // 取前10个出现次数最多的身份证号码
-    krsort($unique_cards, SORT_NUMERIC);
+    krsort($unsort_cards, SORT_NUMERIC);
     
     // 打印前10的身份证号码
     $i = 0;
-    foreach ($unique_cards as $key => $value) {
+    foreach ($unsort_cards as $key => $value) {
         echo $key . "\n";
         $i ++;
         if ($i == 10)
@@ -45,7 +34,12 @@ function readCardFile ($filename)
     
     while (! feof($fd)) {
         $card = fgets($fd);
-        $unsort_cards[] = $card;
+        $card = trim($card);
+        if (isset($unsort_cards[$card])) {
+            $unsort_cards[$card] += 1;
+        } else {
+            $unsort_cards[$card] = 1;
+        }
     }
     
     fclose($fd);
