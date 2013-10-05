@@ -27,14 +27,14 @@ class ConsistentHash
      *
      * @var array {position => target,...}
      */
-    public $_positionToTarget = array();
+    private $_positionToTarget = array();
 
     /**
      * Internal map of targets to lists of positions that target is hashed to.
      *
      * @var array {target => [position, position,...], ...}
      */
-    public $_targetToPositions = array();
+    private $_targetToPositions = array();
 
     /**
      * Whether the internal map of positions to targets is already sorted.
