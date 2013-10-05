@@ -9,46 +9,47 @@ class ConsistentHash
 {
 
     /**
-     * 虚拟节点数，解决节点分布不均匀问题
+     * The number of positions to hash each target to.
      *
      * @var int
      */
     private $_replicas = 64;
 
     /**
-     * 节点计数器
+     * Internal counter for current number of targets.
      *
      * @var int
      */
     private $_targetCount = 0;
 
     /**
-     * 位置对应节点，用于lookup中根据位置确认要访问的节点
+     * Internal map of positions (hash outputs) to targets.
      *
-     * @var array {position => target,..}
+     * @var array {position => target,...}
      */
-    private $_positionToTarget = array();
+    public $_positionToTarget = array();
 
     /**
-     * 节点对应位置，用于删除节点
+     * Internal map of targets to lists of positions that target is hashed to.
      *
-     * @var array {target => [position, position,..]}
+     * @var array {target => [position, position,...], ...}
      */
-    private $_targetToPositions = array();
+    public $_targetToPositions = array();
 
     /**
-     * 排序标识
+     * Whether the internal map of positions to targets is already sorted.
      *
      * @var boolean
      */
     private $_positionToTargetSorted = false;
 
     /**
-     * 构造函数，采用crc32算法进行哈希分布，同时确认虚拟节点数（虚拟节点数越多，分布越均匀，但程序的分布式运算越慢）
+     * Constructor.
      *
-     * @param int $replicas            
+     * @param int $replicas
+     *            Amount of positions to hash each target to.
      */
-    public function __construct ($replicas)
+    public function __construct ($replicas = null)
     {
         if (! empty($replicas)) {
             $this->_replicas = $replicas;
@@ -56,13 +57,14 @@ class ConsistentHash
     }
 
     /**
-     * 添加节点，根据虚拟节点数，将节点分布在多个位置上
+     * Add a target.
      *
      * @param string $target
-     *            服务器ip
-     * @return ConsistentHash
+     *            server ip
+     * @param double $weight
+     *            server weight
      */
-    public function addTarget ($target)
+    public function addTarget ($target, $weight = 1)
     {
         if (isset($this->_targetToPositions[$target])) {
             // 节点已经存在
@@ -71,7 +73,8 @@ class ConsistentHash
         
         $this->_targetToPositions[$target] = array();
         
-        for ($i = 0; $i < $this->_replicas; $i ++) {
+        // 防止数据偏移，根据每台server的权重增加虚拟节点
+        for ($i = 0; $i < round($this->_replicas * $weight); $i ++) {
             $position = crc32($target . '.' . $i);
             $this->_positionToTarget[$position] = $target;
             $this->_targetToPositions[$target][] = $position;
@@ -82,26 +85,28 @@ class ConsistentHash
     }
 
     /**
-     * 增加多个节点
+     * Add a list of targets.
      *
-     * @param array $targets            
-     * @return ConsistentHash
+     * @param array $targets
+     *            [target => weight, ...]
+     * @param double $weight            
      */
     public function addTargets ($targets)
     {
-        foreach ($targets as $target) {
-            $this->addTarget($target);
+        foreach ($targets as $target => $weight) {
+            $this->addTarget($target, $weight);
         }
     }
 
     /**
-     * 删除单个节点
+     * Remove a target
      *
      * @param string $target            
      */
     public function removeTarget ($target)
     {
         if (isset($this->_targetToPositions[$target])) {
+            
             foreach ($this->_targetToPositions[$target] as $position) {
                 unset($this->_positionToTarget[$position]);
             }
@@ -113,9 +118,9 @@ class ConsistentHash
     }
 
     /**
-     * 获取所有服务器节点
+     * A list of all potential targets.
      *
-     * @return multitype:
+     * @return array
      */
     public function getAllTargets ()
     {
@@ -123,16 +128,19 @@ class ConsistentHash
     }
 
     /**
-     * 查找当前资源对应的节点
+     * Get a list of targets for the resource, in order of precedence.
+     * Up to $requestCount targets are returned, less if there are fewer in
+     * total.
      *
      * @param string $resource            
-     * @param count $requestCount            
-     * @return array
+     * @param int $requestCount
+     *            The length of the list to return
+     * @return array List of targets
      */
     public function lookupList ($resource, $requestCount)
     {
-        // 没有虚拟节点
-        if (empty($this->_positionToTarget)) {
+        // handle no targets
+        if ($requestCount <= 0 || empty($this->_positionToTarget)) {
             return array();
         }
         
@@ -142,33 +150,51 @@ class ConsistentHash
         $results = array();
         $collect = false;
         
-        $this->_sortPositionTargets();
+        $this->sortPositionTargets();
         
-        // search values above the resourcePosition
+        // search targets above the resourcePosition
         foreach ($this->_positionToTarget as $key => $value) {
+            // start collecting targets after passing resource position
             if (! $collect && $key > $resourcePosition) {
                 $collect = true;
             }
             
+            // only collect the first instance of any target
             if ($collect && ! in_array($value, $results)) {
                 $results[] = $value;
             }
             
-            if (count($results) == $requestCount || count($results) > $this->_targetCount) {
+            // return when enough results, or list exhausted
+            if (count($results) == $requestCount || count($results) == $this->_targetCount) {
                 return $results;
             }
         }
         
+        // loop to start, search targets below the resourcePosition
+        // (ps:there is no position larger than resourcePosition)
+        foreach ($this->_positionToTarget as $key => $value) {
+            if (! in_array($value, $results)) {
+                $results[] = $value;
+            }
+            
+            // return when enough results, or list exhausted
+            if (count($results) == $requestCount || count($results) == $this->_targetCount) {
+                return $results;
+            }
+        }
+        
+        // return results after iterating through both "parts"
         return $results;
     }
 
     /**
      * sorts the internal mapping
      */
-    private function _sortPositionTargets ()
+    private function sortPositionTargets ()
     {
         if (! $this->_positionToTargetSorted) {
             ksort($this->_positionToTarget, SORT_NUMERIC);
+            
             $this->_positionToTargetSorted = true;
         }
     }
